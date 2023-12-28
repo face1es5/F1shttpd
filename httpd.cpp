@@ -7,15 +7,18 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <cctype>
 #include "httpd.h"
 
 #define MaxCharNum 1024
 #define SERVER_STRING "Server: F1SHhttpd/0.0\r\n"
-#define ROOTPATH "html"
+#define HTMLPATH "html"
+#define CGIPATH "cgi-bin"
 #define S_ISXUSR(m) (((m) & S_IFMT) == S_IXUSR)
 #define S_ISXGRP(m) (((m) & S_IFMT) == S_IXGRP)
 #define S_ISXOTH(m) (((m) & S_IFMT) == S_IXOTH)
+#define NULL ((void*)0)
 
 using namespace std;
 
@@ -99,7 +102,8 @@ void Server::startup(int port){
  * @brief read line from socket
  * linefeed can be \\n,\\r or \\r\\n, this function will make last valid char of return string is \\n
  * and terminate it with \\0.
- * if read a blank line, .e.g \\n, \\r, \\r\\n, it will returns "\\n"
+ * if read a blank line, .e.g \\n, \\r, \\r\\n, it will returns "\\n".
+ * IF NO DATA READS FROM THE CLIENT, IT WILL BLOCK.
  * @param sock socket fd
  * @return string to store data
 */
@@ -140,11 +144,17 @@ void Server::send_before_entity(int client, int status){
         case 200:
             buf="HTTP/1.0 200 OK\r\n";
             break;
+        case 400:
+            buf="HTTP/1.0 400 BAD REQUEST\r\n";
+            break;
         case 404:
-            buf="HTTP/1.0 404 Not Found\r\n";
+            buf="HTTP/1.0 404 NOT FOUND\r\n";
+            break;
+        case 500:
+            buf="HTTP/1.0 500 INTERNAL SERVER ERROR\r\n";
             break;
         case 501:
-            buf="HTTP/1.0 501 Not Implemented\r\n";
+            buf="HTTP/1.0 501 NOT IMPLEMENTED\r\n";
             break;
         default:
             buf="HTTP/1.0 200 OK\r\n";
@@ -189,11 +199,108 @@ void Server::not_found(int client,string path){
 }
 
 /**
+ * @brief send 400 bad request
+ * @param client client's socket fd
+*/
+void Server::bad_request(int client){
+    send_before_entity(client,400);
+    string buf;
+    
+    buf="<html><head><title>Bad Request</title></head>\r\n";
+    buf+="<body>A bad request is accecpted.(.e.g A POST without Content-Length header)</body>\r\n";
+    buf+="</html>\r\n";
+    send(client,buf.c_str(),buf.size(),0);
+}
+
+/**
+ * @brief send 500 server error as cgi exec failed.
+ * @param client client's socket fd
+*/
+void Server::cannot_exec(int client){
+    send_before_entity(client,500);
+    string buf="<html><head><title>Server error</title></head>\r\n";
+    buf+="<body>Fail to execute CGI program.</body></html>\r\n";
+    send(client,buf.c_str(),buf.size(),0);
+}
+
+/**
  * @brief execute cgi program
+ * @param client client's socket fd
+ * @param path path of requested file
+ * @param method request method
+ * @param query request query string
  * TODO: implement it
 */
-void Server::execute_cgi(int client,string path,string method,string query_str){
+void Server::execute_cgi(int client,string path,
+string method,string query){
+    string buf;
+    int content_length=-1;
+    int cgi_pid;
+    int cgi_in[2];  //cgi input, send data to cgi program
+    int cgi_out[2]; //cgi output, read data from cgi prog
+    int status;
 
+    //discard headers
+    if (0 == strcasecmp(method.c_str(),"GET")){
+        do{
+            buf=get_line(client);
+        }while(buf.size() > 0 && buf != "\n");
+    }else{  //POST request, read body
+        //read header Content-Length and discard headers
+        do{
+            buf=get_line(client);
+            if (buf.size() >= 15
+            && !strcasecmp(buf.substr(0,15).c_str(),"Content-Length:")
+            ){
+                content_length=atoi(buf.substr(16,buf.size()-16).c_str());
+            }
+        }while(buf.size() > 0 && buf != "\n");
+        if (-1 == content_length)
+            bad_request(client);
+    }
+
+    send_before_entity(client,200);
+
+    /*execute cgi program*/
+    //create pipe
+    if (-1 == pipe(cgi_in) || -1 == pipe(cgi_out))
+        cannot_exec(client);
+    if (0 == (cgi_pid=fork())){ //child proc
+        if (0 == strcasecmp(method.c_str(),"GET")){ //GET
+            //TODO: ...
+        }else if (0 == strcasecmp(method.c_str(),"POST")){ //POST
+            char s[MaxCharNum];
+            char ch;
+            //TODO: set env
+            //DEBUG: demo
+            close(cgi_in[1]);   //close write of pipe
+            dup2(cgi_in[0],0);  //close stdin and make stdin connect with cgi_in[0]
+        }
+        execl(path.c_str(),path.c_str(),NULL);
+        cout<<"DONE"<<endl;
+        exit(0);
+    }else{  //parent
+        //TODO: ...
+        //DEBUG: demo
+        close(cgi_in[0]);
+        close(cgi_out[1]);
+        char ch;
+        //read post body and write to pipe
+        if (0 == strcasecmp(method.c_str(),"POST")){
+            for(int i=0;i<content_length;i++){
+                recv(client,&ch,1,0);
+                write(cgi_in[1],&ch,1);
+            }
+        }
+        //read cgi output from pipe
+        // while(-1 != read(cgi_out[0],&ch,1))
+            // cout<<ch;
+        //clean
+        close(cgi_in[1]);
+        close(cgi_out[0]);
+        waitpid(cgi_pid,&status,0);
+        cout<<"cgi exec done."<<endl;
+    }
 }
 
 /**
@@ -211,6 +318,7 @@ void Server::send_response(int client,string path){
     if (!resource.is_open())
         not_found(client,path);
     else{
+        //send response
         send_before_entity(client,200);
         for(;getline(resource,buf);){
             buf+="\n";
@@ -266,7 +374,7 @@ void Server::accept_request(int client){
     i=j;
     
     //extract query string from url
-    if (!strcasecmp(method.c_str(),"GET")){
+    if (0 == strcasecmp(method.c_str(),"GET")){
         int pos=url.find('?');
         if (string::npos != pos){
             cgi=true;
@@ -276,7 +384,12 @@ void Server::accept_request(int client){
         }
     }
 
-    path=ROOTPATH+url;
+    //complete path
+    if (0 == strcasecmp(method.c_str(),"GET"))
+        path=HTMLPATH+url;
+    else if (0 == strcasecmp(method.c_str(),"POST"))
+        path=CGIPATH+url;
+    
     if ('/' == path.back()) //request default index.html 
         path+="index.html";
 
@@ -301,6 +414,8 @@ void Server::accept_request(int client){
     }
 
     close(client);
+    //DEBUG:
+    cout<<"Server close connection: "<<client<<endl;
 }
 
 int main(){

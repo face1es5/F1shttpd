@@ -31,7 +31,7 @@ int main(){
         cerr<<"open connection failed."<<endl;
         exit(1);
     }
-    string req="GET /?name=dick HTTP/1.0\r\nfuck\r\n\r\n";
+    string req="GET /index.html HTTP/1.0\r\n\r\n";
     send(sock,req.c_str(),req.size(),0);
     print_response(sock);
     close(sock);

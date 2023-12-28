@@ -9,10 +9,12 @@ public:
     static void accept_request(int client);
     static string get_line(int sock);
     static void send_response(int client,string path);
-    static void execute_cgi(int client,string path,string method,string query_str);
+    static void execute_cgi(int client,string path,string method,string query);
     static void not_found(int client,string path);
     static void unimplemented(int client);
     static void send_before_entity(int client,int status);
+    static void bad_request(int clinet);
+    static void cannot_exec(int clinet);
 private:
     int port;
     int _sock;
