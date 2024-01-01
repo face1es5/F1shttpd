@@ -1,5 +1,12 @@
 #!/usr/bin/bash
 
+echo -e -n 'HTTP 1.0 200 OK\r\n'
+echo -e -n 'Content-Type: text/html\r\n'
+echo -e -n '\r\n'
+
+echo '<html><head><title>jesus</title></head>'
+echo '<body>'
+
 cat  << EOF
                                  |~~~~~~~|
                                  |       |
@@ -45,3 +52,4 @@ EOF
 
 read msg
 echo $msg
+echo '</body></html>'

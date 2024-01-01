@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #include <cctype>
 #include "httpd.h"
 
@@ -18,7 +19,6 @@
 #define S_ISXUSR(m) (((m) & S_IFMT) == S_IXUSR)
 #define S_ISXGRP(m) (((m) & S_IFMT) == S_IXGRP)
 #define S_ISXOTH(m) (((m) & S_IFMT) == S_IXOTH)
-#define NULL ((void*)0)
 
 using namespace std;
 
@@ -236,7 +236,7 @@ string method,string query){
     string buf;
     int content_length=-1;
     int cgi_pid;
-    int cgi_in[2];  //cgi input, send data to cgi program
+    int cgi_in[2];  //cgi input, cgi prog will read data from cgi_in[0]
     int cgi_out[2]; //cgi output, read data from cgi prog
     int status;
 
@@ -261,27 +261,42 @@ string method,string query){
 
     send_before_entity(client,200);
 
-    /*execute cgi program*/
     //create pipe
-    if (-1 == pipe(cgi_in) || -1 == pipe(cgi_out))
+    if (-1 == pipe(cgi_in) || -1 == pipe(cgi_out)){
         cannot_exec(client);
+        return;
+    }
+
+    //exec cgi program
     if (0 == (cgi_pid=fork())){ //child proc
+        /*
+        prepare to read data from cgi_in[0] and send data to cgi_out[1]
+        */
+        close(cgi_in[1]);
+        dup2(cgi_in[0],0);
+        close(cgi_out[0]);
+        dup2(cgi_out[1],1);
+
+        //put request method
+        char env_buf[MaxCharNum];
+        sprintf(env_buf,"REQUEST_METHOD=%s",method.c_str());
+        putenv(env_buf);
+
         if (0 == strcasecmp(method.c_str(),"GET")){ //GET
-            //TODO: ...
+            memset(env_buf,0,MaxCharNum);
+            //put query string
+            sprintf(env_buf,"QUERY_STRING=%s",query.c_str());
+            putenv(env_buf);
         }else if (0 == strcasecmp(method.c_str(),"POST")){ //POST
-            char s[MaxCharNum];
-            char ch;
-            //TODO: set env
-            //DEBUG: demo
-            close(cgi_in[1]);   //close write of pipe
-            dup2(cgi_in[0],0);  //close stdin and make stdin connect with cgi_in[0]
+            memset(env_buf,0,MaxCharNum);
+            //put content length
+            sprintf(env_buf,"CONTENT_LENGTH=%d",content_length);
+            putenv(env_buf);
         }
         execl(path.c_str(),path.c_str(),NULL);
-        cout<<"DONE"<<endl;
         exit(0);
     }else{  //parent
-        //TODO: ...
-        //DEBUG: demo
+        //close pipe...
         close(cgi_in[0]);
         close(cgi_out[1]);
         char ch;
@@ -292,14 +307,33 @@ string method,string query){
                 write(cgi_in[1],&ch,1);
             }
         }
-        //read cgi output from pipe
-        // while(-1 != read(cgi_out[0],&ch,1))
-            // cout<<ch;
-        //clean
+        /*As only after all fd on the write sied of the pipe cgi_in are
+        closed, it will read EOF from pipe, so when all data is sended to cgi,
+        we need to close fd of the write side immediately before read data
+        from cgi.
+        if we close cgi_in[1] after reading data from cgi,
+        when cgi program try to read data from stdin(bound to cgi_in[0]),
+        and main program try to read data from pipe(here is cgi_out[0]),
+        the IO will be blocked forever.
+        Because cgi prog will be blocked on reading, and main porg will be blocked
+        on reading too(as cgi prog close fd of write sied after reading,
+        except you close cgi_out[1] before reading in cgi prog),
+        And because main prog is blocked on reading too,
+        it can't reach to close write side of pipe cgi_out,
+        thus cgi prog is blocked on reading forever, as it can't receive
+        EOF, and then cgi will never reach to close write side of cgi output too.
+        */
         close(cgi_in[1]);
+
+        //read cgi output from pipe
+        while(read(cgi_out[0],&ch,1) > 0)
+            send(client,&ch,1,0);
+        
+        //close pipe.
         close(cgi_out[0]);
+
+        //reap child process
         waitpid(cgi_pid,&status,0);
-        cout<<"cgi exec done."<<endl;
     }
 }
 
@@ -414,8 +448,6 @@ void Server::accept_request(int client){
     }
 
     close(client);
-    //DEBUG:
-    cout<<"Server close connection: "<<client<<endl;
 }
 
 int main(){
@@ -424,7 +456,7 @@ int main(){
     socklen_t client_len=sizeof(client);
     pthread_t newthread;
     //start the server
-    httpd.startup(10086);
+    httpd.startup(0);
     cout<<"the httpd server is starting up, listening on port:"<<httpd.getPort()<<endl;
 
 
