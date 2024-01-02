@@ -13,7 +13,7 @@
 #include "httpd.h"
 
 #define MaxCharNum 1024
-#define SERVER_STRING "Server: F1SHhttpd/0.0\r\n"
+#define SERVER_STRING "Server: F1SHhttpd/0.1\r\n"
 #define HTMLPATH "html"
 #define CGIPATH "cgi-bin"
 #define S_ISXUSR(m) (((m) & S_IFMT) == S_IXUSR)
@@ -23,7 +23,7 @@
 using namespace std;
 
 /**
- * @def print error message and exit.
+ * @brief print error message and exit.
  * @param s msg to print
 */
 void error_die(const string s){
@@ -32,7 +32,7 @@ void error_die(const string s){
 }
 
 /**
- * @def do nothing...
+ * @brief nothing to do...
 */
 Server::Server(){}
 
@@ -133,7 +133,8 @@ string Server::get_line(int sock){
 }
 
 /**
- * @brief send start line, response headers and a blank line \\r\\n
+ * @brief send start line, response headers and a blank line \\r\\n,
+ * in short, send data that before sending reponse body
  * @param client client 's socket fd
  * @param status status code
 */
@@ -224,12 +225,12 @@ void Server::cannot_exec(int client){
 }
 
 /**
- * @brief execute cgi program
+ * @brief execute cgi program,
+ * output of cgi program will be sended to client as response.
  * @param client client's socket fd
  * @param path path of requested file
  * @param method request method
  * @param query request query string
- * TODO: implement it
 */
 void Server::execute_cgi(int client,string path,
 string method,string query){
@@ -341,7 +342,7 @@ string method,string query){
  * @brief send file to client by socket
  * @param client client socket fd
 */
-void Server::send_response(int client,string path){
+void Server::serve_file(int client,string path){
     string buf;
     fstream resource(path,ios::in);
     //read and discard request head
@@ -368,10 +369,10 @@ void Server::send_response(int client,string path){
 */
 void Server::accept_request(int client){
     string buf;
-    string method;
-    string url;
-    string path;
-    string query="";
+    string method;  //request method
+    string url; //request url
+    string path;    //request resource path
+    string query="";    //requet query string
 
     struct stat st;
     bool cgi=false; //if request carries with data, becomes true, .e.g http://xxx.com/xxx?xxx or post request.
@@ -407,24 +408,23 @@ void Server::accept_request(int client){
     buf[j++]='\0';
     i=j;
     
+    path=url;
     //extract query string from url
     if (0 == strcasecmp(method.c_str(),"GET")){
-        int pos=url.find('?');
+        const size_t pos=url.find('?');
         if (string::npos != pos){
             cgi=true;
             query=url.substr(pos+1,url.size()-pos-1);
-            url=url.substr(0,pos);  //truncate url
-            path=url;   //and reassign path
+            path=url.substr(0,pos); //discard query string
         }
     }
 
     //complete path
     if (0 == strcasecmp(method.c_str(),"GET"))
-        path=HTMLPATH+url;
+        path=HTMLPATH+path;
     else if (0 == strcasecmp(method.c_str(),"POST"))
-        path=CGIPATH+url;
-    
-    if ('/' == path.back()) //request default index.html 
+        path=CGIPATH+path;
+    if ('/' == path.back()) //request default page
         path+="index.html";
 
     if (-1 == stat(path.c_str(),&st)){  //requested file not found.
@@ -432,19 +432,20 @@ void Server::accept_request(int client){
         do{
             buf=get_line(client);
         }while(buf.size()>0 && buf!="\n");
+        //send not found page
         not_found(client,path);
     }else{
-        if (S_ISDIR(st.st_mode))    //it's directory
-            path+="/index.html";
+        if (S_ISDIR(st.st_mode))    //path is a directory
+            path+="/index.html";    //request default page
         if (S_ISXUSR(st.st_mode) ||
             S_ISXGRP(st.st_mode) ||
             S_ISXOTH(st.st_mode)
-        )
+        )   //this file is executable
             cgi=true;
         if (cgi)
             execute_cgi(client,path,method,query);
-        else
-            send_response(client,path);
+        else    //send static page file
+            serve_file(client,path);
     }
 
     close(client);
@@ -460,14 +461,14 @@ int main(){
     cout<<"the httpd server is starting up, listening on port:"<<httpd.getPort()<<endl;
 
 
-    //...
+    //accept connection from client and create a new thread to deal with this request.
     while(1){
         int client_sock=accept(httpd.getSock(),(struct sockaddr*)&client,&client_len);
         if (-1 == client_sock)
             error_die("accept failed.");
         //create a new thread to deal with request
         if (pthread_create(&newthread,0,(void*(*)(void*))Server::accept_request,(void*)(long)client_sock) < 0)
-            cerr<<"create thread failed."<<endl;
+            perror("Create thread failed.");
     }
 
     close(httpd.getSock());
