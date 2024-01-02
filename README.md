@@ -13,4 +13,5 @@ test.sh - similary to client.cpp, to test whether the server application runs co
 
 # Compile
 `make`
+
 Then you will generate a program named httpd, this is the server program. You will be noticed with the port that server is listening on, you can using test.sh to test it(or browser).
