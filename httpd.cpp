@@ -13,7 +13,7 @@
 #include "httpd.h"
 
 #define MaxCharNum 1024
-#define SERVER_STRING "Server: F1SHhttpd/0.1\r\n"
+#define SERVER_STRING "Server: F1shttpd/1.0\r\n"
 #define HTMLPATH "html"
 #define CGIPATH "cgi-bin"
 #define S_ISXUSR(m) (((m) & S_IFMT) == S_IXUSR)
